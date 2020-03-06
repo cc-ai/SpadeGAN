@@ -36,6 +36,9 @@ class MUNIT_Trainer(nn.Module):
         self.recon_mask = hyperparameters["recon_mask"] == 1
         self.dann_scheduler = None
         self.full_adaptation = hyperparameters["adaptation"]["full_adaptation"] == 1
+        dim = hyperparameters["gen"]["dim"]
+        n_downsample = hyperparameters["gen"]["n_downsample"]
+        latent_dim = dim * (2 ** n_downsample)
 
         if "domain_adv_w" in hyperparameters.keys():
             self.domain_classif_ab = hyperparameters["domain_adv_w"] > 0
@@ -106,11 +109,6 @@ class MUNIT_Trainer(nn.Module):
 
         # Load semantic segmentation model if needed
         if "semantic_w" in hyperparameters.keys() and hyperparameters["semantic_w"] > 0:
-            print("---------------------")
-            print("----------------------")
-            print("---------------------")
-            print("----------------------")
-            print("----------------------")
             self.segmentation_model = load_segmentation_model(
                 hyperparameters["semantic_ckpt_path"], 19
             )
@@ -120,7 +118,7 @@ class MUNIT_Trainer(nn.Module):
 
         # Load domain classifier if needed
         if "domain_adv_w" in hyperparameters.keys() and hyperparameters["domain_adv_w"] > 0:
-            self.domain_classifier_ab = domainClassifier(256)
+            self.domain_classifier_ab = domainClassifier(input_dim=latent_dim, dim=256)
             dann_params = list(self.domain_classifier_ab.parameters())
             self.dann_opt = torch.optim.Adam(
                 [p for p in dann_params if p.requires_grad],
@@ -133,9 +131,10 @@ class MUNIT_Trainer(nn.Module):
 
         # Load classifier on features for syn, real adaptation
         if self.use_classifier_sr:
+            #! Hardcoded
+            self.domain_classifier_sr_b = domainClassifier(input_dim=latent_dim, dim=256)
+            self.domain_classifier_sr_a = domainClassifier(input_dim=latent_dim, dim=256)
 
-            self.domain_classifier_sr_b = domainClassifier(256)
-            self.domain_classifier_sr_a = domainClassifier(256)
             dann_params = list(self.domain_classifier_sr_a.parameters()) + list(
                 self.domain_classifier_sr_b.parameters()
             )
@@ -217,7 +216,7 @@ class MUNIT_Trainer(nn.Module):
         """
         return torch.mean(torch.abs(torch.mul((input - target), 1 - mask)))
 
-    def forward(self, x_a, x_b):
+    def forward(self, x_a, x_b, m_a, m_b):
         """
         Perform the translation from domain A (resp B) to domain B (resp A): x_a to x_ab (resp: x_b to x_ba).
         
@@ -229,8 +228,12 @@ class MUNIT_Trainer(nn.Module):
             torch.Tensor, torch.Tensor -- Translated version of x_a in domain B, Translated version of x_b in domain A
         """
         self.eval()
+        x_a_augment = torch.cat([x_a, m_a], dim=1)
+        x_b_augment = torch.cat([x_b, m_b], dim=1)
+
         c_a = self.gen.encode(x_a, 1)
         c_b = self.gen.encode(x_b, 2)
+
         x_ba = self.gen.decode(c_b, 1)
         x_ab = self.gen.decode(c_a, 2)
 
@@ -269,6 +272,9 @@ class MUNIT_Trainer(nn.Module):
         self.gen_opt.zero_grad()
 
         # encode
+        x_a_augment = torch.cat([x_a, mask_a], dim=1)
+        x_b_augment = torch.cat([x_b, mask_b], dim=1)
+
         c_a = self.gen.encode(x_a, 1)
         c_b = self.gen.encode(x_b, 2)
 
@@ -279,6 +285,8 @@ class MUNIT_Trainer(nn.Module):
         x_ba = self.gen.decode(c_b, mask_b, 1)
         x_ab = self.gen.decode(c_a, mask_a, 2)
 
+        x_ba_augment = torch.cat([x_ba, mask_b], dim=1)
+        x_ab_augment = torch.cat([x_ab, mask_a], dim=1)
         # encode again
         c_b_recon = self.gen.encode(x_ba, 1)
         c_a_recon = self.gen.encode(x_ab, 2)
@@ -339,9 +347,6 @@ class MUNIT_Trainer(nn.Module):
 
         # GAN loss
         # Concat masks before feeding to loss
-
-        x_ba_augment = torch.cat([x_ba, mask_b], dim=1)
-        x_ab_augment = torch.cat([x_ab, mask_a], dim=1)
 
         self.loss_gen_adv_a = self.dis_a.calc_gen_loss(x_ba_augment, comet_exp, mode="a")
         self.loss_gen_adv_b = self.dis_b.calc_gen_loss(x_ab_augment, comet_exp, mode="b")
@@ -615,6 +620,9 @@ class MUNIT_Trainer(nn.Module):
 
         x_a_recon, x_b_recon, x_ba1, x_ba2, x_ab1, x_ab2 = [], [], [], [], [], []
 
+        x_a_augment = torch.cat([x_a, m_a], dim=1)
+        x_b_augment = torch.cat([x_b, m_b], dim=1)
+
         for i in range(x_a.size(0)):
             c_a = self.gen.encode(x_a[i].unsqueeze(0), 1)
             c_b = self.gen.encode(x_b[i].unsqueeze(0), 2)
@@ -705,7 +713,7 @@ class MUNIT_Trainer(nn.Module):
         else:
             return x_a, x_a_recon, x_ab1, x_ab2, save_m_a, x_b, x_b_recon, x_ba1, x_ba2, save_m_b
 
-    def sample_syn(self, x_a, x_b):
+    def sample_syn(self, x_a, x_b, m_a, m_b):
         """ 
         Infer the model on a batch of image
         
@@ -721,12 +729,14 @@ class MUNIT_Trainer(nn.Module):
         self.eval()
 
         x_a_recon, x_b_recon, x_ba1, x_ba2, x_ab1, x_ab2 = [], [], [], [], [], []
+        x_a_augment = torch.cat([x_a, m_a], dim=1)
+        x_b_augment = torch.cat([x_b, m_b], dim=1)
 
         for i in range(x_a.size(0)):
             c_a = self.gen.encode(x_a[i].unsqueeze(0), 1)
             c_b = self.gen.encode(x_b[i].unsqueeze(0), 2)
-            x_a_recon.append(self.gen.decode(c_a, 1))
-            x_b_recon.append(self.gen.decode(c_b, 2))
+            x_a_recon.append(self.gen.decode(c_a, m_a[i].unsqueeze(0), 1))
+            x_b_recon.append(self.gen.decode(c_b, m_b[i].unsqueeze(0), 2))
 
             x_ba1.append(self.gen.decode(c_b, m_b[i].unsqueeze(0), 1))
             x_ba2.append(self.gen.decode(c_b, m_b[i].unsqueeze(0), 1))
@@ -818,6 +828,8 @@ class MUNIT_Trainer(nn.Module):
             comet_exp {cometExperience} -- CometML object use to log all the loss and images (default: {None})        
         """
         self.dis_opt.zero_grad()
+        x_a_augment = torch.cat([x_a, m_a], dim=1)
+        x_b_augment = torch.cat([x_b, m_b], dim=1)
 
         # encode
         c_a = self.gen.encode(x_a, 1)
@@ -828,9 +840,6 @@ class MUNIT_Trainer(nn.Module):
 
         x_ba_augment = torch.cat([x_ba, m_b], dim=1)
         x_ab_augment = torch.cat([x_ab, m_a], dim=1)
-
-        x_a_augment = torch.cat([x_a, m_a], dim=1)
-        x_b_augment = torch.cat([x_b, m_b], dim=1)
 
         # D loss
         self.loss_dis_a = self.dis_a.calc_dis_loss(
@@ -886,6 +895,10 @@ class MUNIT_Trainer(nn.Module):
     ):
 
         self.classif_opt_sr.zero_grad()
+        x_a_augment = torch.cat([x_a, m_a], dim=1)
+        x_b_augment = torch.cat([x_b, m_b], dim=1)
+        x_ba_augment = torch.cat([x_ba, m_b], dim=1)
+        x_ab_augment = torch.cat([x_ab, m_a], dim=1)
 
         # encode
         c_a = self.gen.encode(x_a, 1)
