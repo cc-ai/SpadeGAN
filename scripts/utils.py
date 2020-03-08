@@ -501,7 +501,7 @@ class MyDatasetSynthetic(Dataset):
             image_a, image_b, mask {Image, Image, Image} -- transformed image_a, pair image_b and mask
         """
         # Random horizontal flipping
-        if torch.rand(1) > 0.5:
+        if torch.rand(1) > 1:
             image_a = image_a.transpose(Image.FLIP_LEFT_RIGHT)
             image_b = image_b.transpose(Image.FLIP_LEFT_RIGHT)
             mask = mask.transpose(Image.FLIP_LEFT_RIGHT)
@@ -516,7 +516,8 @@ class MyDatasetSynthetic(Dataset):
         # print('dim image after resize',image.size)
 
         # Resize mask
-        mask = mask.resize((image_b.width, image_b.height), Image.NEAREST)
+        #mask = mask.resize((image_b.width, image_b.height), Image.NEAREST)
+        mask = resize(mask)
         semantic_a = semantic_a.resize((image_b.width, image_b.height), Image.NEAREST)
         semantic_b = semantic_b.resize((image_b.width, image_b.height), Image.NEAREST)
 

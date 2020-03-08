@@ -4,7 +4,7 @@ Licensed under the CC BY-NC-SA 4.0 license (https://creativecommons.org/licenses
 """
 from comet_ml import Experiment
 
-comet_exp = Experiment(workspace="sunandr", project_name="testing-munit")
+comet_exp = Experiment(workspace="sunandr", project_name="testing-spade")
 
 from utils import (
     get_all_data_loaders,

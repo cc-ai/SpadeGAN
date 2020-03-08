@@ -895,10 +895,6 @@ class MUNIT_Trainer(nn.Module):
     ):
 
         self.classif_opt_sr.zero_grad()
-        x_a_augment = torch.cat([x_a, m_a], dim=1)
-        x_b_augment = torch.cat([x_b, m_b], dim=1)
-        x_ba_augment = torch.cat([x_ba, m_b], dim=1)
-        x_ab_augment = torch.cat([x_ab, m_a], dim=1)
 
         # encode
         c_a = self.gen.encode(x_a, 1)
