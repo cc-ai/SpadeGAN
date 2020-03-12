@@ -20,6 +20,7 @@ import numpy as np
 import torch.nn.init as init
 import time
 from resnet import resnet34
+import re
 
 # Methods
 # get_all_data_loaders          : primary data loader interface (load trainA, testA, trainB, testB)
@@ -1404,3 +1405,10 @@ def flatten_opts(opts):
 
     p(opts, vals=values_list)
     return dict(values_list)
+
+
+def sorted_nicely( l ): 
+    """ Sort the given iterable in the way that humans expect.""" 
+    convert = lambda text: int(text) if text.isdigit() else text 
+    alphanum_key = lambda key: [ convert(c) for c in re.split('([0-9]+)', key) ] 
+    return sorted(l, key = alphanum_key)
