@@ -7,6 +7,8 @@ from torch.autograd import Variable
 import torch
 import torch.nn.functional as F
 import torch.autograd as autograd
+import numpy as np
+import functools
 
 try:
     from itertools import izip as zip
@@ -217,6 +219,188 @@ class MsImageDis(nn.Module):
             else:
                 assert 0, "Unsupported GAN type: {}".format(self.gan_type)
         return loss
+
+
+class MultiscaleDiscriminator(nn.Module):
+    def __init__(self, input_nc, params):
+        super(MultiscaleDiscriminator, self).__init__()
+        # self, input_nc, ndf=64, n_layers=3, norm_layer=nn.BatchNorm2d,
+        #         use_sigmoid=False, num_D=3, getIntermFeat=False
+        self.getIntermFeat = params["getIntermFeat"]
+        self.n_layers = params["n_layer"]
+        self.ndf = params["dim"]
+        self.norm_layer = get_norm_layer(params["norm"])
+        self.use_sigmoid = params["use_sigmoid"]
+        self.getIntermFeat = params["getIntermFeat"]
+        self.num_D = params["num_D"]
+        self.gan_type = params["gan_type"]
+        self.lambda_feat = params["lambda_feat"]
+
+        for i in range(self.num_D):
+            netD = NLayerDiscriminator(input_nc, params)
+            if self.getIntermFeat:
+                for j in range(self.n_layers + 2):
+                    setattr(
+                        self, "scale" + str(i) + "_layer" + str(j), getattr(netD, "model" + str(j))
+                    )
+            else:
+                setattr(self, "layer" + str(i), netD.model)
+
+        self.downsample = nn.AvgPool2d(3, stride=2, padding=[1, 1], count_include_pad=False)
+
+    def singleD_forward(self, model, input):
+        if self.getIntermFeat:
+            result = [input]
+            for i in range(len(model)):
+                result.append(model[i](result[-1]))
+            return result[1:]
+        else:
+            return [model(input)]
+
+    def forward(self, input):
+        num_D = self.num_D
+        result = []
+        input_downsampled = input
+        for i in range(num_D):
+            if self.getIntermFeat:
+                model = [
+                    getattr(self, "scale" + str(num_D - 1 - i) + "_layer" + str(j))
+                    for j in range(self.n_layers + 2)
+                ]
+            else:
+                model = getattr(self, "layer" + str(num_D - 1 - i))
+            result.append(self.singleD_forward(model, input_downsampled))
+            if i != (num_D - 1):
+                input_downsampled = self.downsample(input_downsampled)
+        return result
+
+    def calc_dis_loss(self, input_fake, input_real, comet_exp=None, mode=None):
+        # calculate the loss to train D
+        outs0 = self.forward(input_fake)
+        outs1 = self.forward(input_real)
+        loss = 0
+        # print(len(outs0), len(outs1))
+
+        for it, (out0, out1) in enumerate(zip(outs0, outs1)):
+            out0 = out0[-1]
+            out1 = out1[-1]
+
+            if self.gan_type == "lsgan":
+                loss += torch.mean((out0 - 0) ** 2) + torch.mean((out1 - 1) ** 2)
+            elif self.gan_type == "nsgan":
+                all0 = Variable(torch.zeros_like(out0.data).cuda(), requires_grad=False)
+                all1 = Variable(torch.ones_like(out1.data).cuda(), requires_grad=False)
+                loss += torch.mean(
+                    F.binary_cross_entropy(F.sigmoid(out0), all0)
+                    + F.binary_cross_entropy(F.sigmoid(out1), all1)
+                )
+            else:
+                assert 0, "Unsupported GAN type: {}".format(self.gan_type)
+
+        return loss
+
+    def calc_gen_loss(self, input_fake, input_real, comet_exp=None, mode=None):
+        # calculate the loss to train G
+        outs0 = self.forward(input_fake)
+        outs1 = self.forward(input_real)
+        loss = 0
+        feat_weights = 4.0 / (self.n_layers + 1)
+        D_weights = 1.0 / self.num_D
+        self.criterionFeat = torch.nn.L1Loss()
+        loss_G_GAN_Feat = 0
+
+        for it, (out0, out1) in enumerate(zip(outs0, outs1)):
+            out0_output = out0[-1]
+            out1_output = out1[-1]
+
+            if self.gan_type == "lsgan":
+                loss += torch.mean((out0_output - 1) ** 2)  # LSGAN
+            elif self.gan_type == "nsgan":
+                all1 = Variable(torch.ones_like(out0.data).cuda(), requires_grad=False)
+                loss += torch.mean(F.binary_cross_entropy(F.sigmoid(out0), all1))
+            else:
+                assert 0, "Unsupported GAN type: {}".format(self.gan_type)
+
+            if self.getIntermFeat:
+                for j in range(len(out0) - 1):
+                    loss_G_GAN_Feat += (
+                        D_weights
+                        * feat_weights
+                        * self.criterionFeat(out0[j], out1[j].detach())
+                        * self.lambda_feat
+                    )
+
+                loss += loss_G_GAN_Feat
+
+            return loss
+
+
+# Defines the PatchGAN discriminator with the specified arguments.
+class NLayerDiscriminator(nn.Module):
+    def __init__(self, input_nc, params):
+        # ndf=64, n_layers=3, norm_layer=nn.BatchNorm2d, use_sigmoid=False, getIntermFeat=False
+        super(NLayerDiscriminator, self).__init__()
+        self.getIntermFeat = params["getIntermFeat"]
+        self.n_layers = params["n_layer"]
+        self.ndf = params["dim"]
+        self.norm_layer = get_norm_layer(params["norm"])
+        self.use_sigmoid = params["use_sigmoid"]
+        self.getIntermFeat = params["getIntermFeat"]
+
+        kw = 4
+        padw = int(np.ceil((kw - 1.0) / 2))
+        sequence = [
+            [
+                nn.Conv2d(input_nc, self.ndf, kernel_size=kw, stride=2, padding=padw),
+                nn.LeakyReLU(0.2, True),
+            ]
+        ]
+
+        nf = self.ndf
+        for n in range(1, self.n_layers):
+            nf_prev = nf
+            nf = min(nf * 2, 512)
+            sequence += [
+                [
+                    nn.Conv2d(nf_prev, nf, kernel_size=kw, stride=2, padding=padw),
+                    self.norm_layer(nf),
+                    nn.LeakyReLU(0.2, True),
+                ]
+            ]
+
+        nf_prev = nf
+        nf = min(nf * 2, 512)
+        sequence += [
+            [
+                nn.Conv2d(nf_prev, nf, kernel_size=kw, stride=1, padding=padw),
+                self.norm_layer(nf),
+                nn.LeakyReLU(0.2, True),
+            ]
+        ]
+
+        sequence += [[nn.Conv2d(nf, 1, kernel_size=kw, stride=1, padding=padw)]]
+
+        if self.use_sigmoid:
+            sequence += [[nn.Sigmoid()]]
+
+        if self.getIntermFeat:
+            for n in range(len(sequence)):
+                setattr(self, "model" + str(n), nn.Sequential(*sequence[n]))
+        else:
+            sequence_stream = []
+            for n in range(len(sequence)):
+                sequence_stream += sequence[n]
+            self.model = nn.Sequential(*sequence_stream)
+
+    def forward(self, input):
+        if self.getIntermFeat:
+            res = [input]
+            for n in range(self.n_layers + 2):
+                model = getattr(self, "model" + str(n))
+                res.append(model(res[-1]))
+            return res[1:]
+        else:
+            return self.model(input)[-1]
 
 
 ##################################################################################
@@ -583,6 +767,23 @@ class Vgg16(nn.Module):
 ##################################################################################
 # Normalization layers
 ##################################################################################
+
+
+def get_norm_layer(norm_type="instance"):
+    if not norm_type:
+        print("norm_type is {}, defaulting to instance")
+        norm_type = "instance"
+    if norm_type == "batch":
+        norm_layer = functools.partial(nn.BatchNorm2d, affine=True)
+    elif norm_type == "instance":
+        norm_layer = functools.partial(nn.InstanceNorm2d, affine=False, track_running_stats=False)
+    elif norm_type == "none":
+        norm_layer = None
+    else:
+        raise NotImplementedError("normalization layer [%s] is not found" % norm_type)
+    return norm_layer
+
+
 class AdaptiveInstanceNorm2d(nn.Module):
     def __init__(self, num_features, eps=1e-5, momentum=0.1):
         super(AdaptiveInstanceNorm2d, self).__init__()

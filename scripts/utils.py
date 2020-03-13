@@ -21,6 +21,7 @@ import torch.nn.init as init
 import time
 from resnet import resnet34
 import re
+from addict import Dict
 
 # Methods
 # get_all_data_loaders          : primary data loader interface (load trainA, testA, trainB, testB)
@@ -1412,3 +1413,32 @@ def sorted_nicely( l ):
     convert = lambda text: int(text) if text.isdigit() else text 
     alphanum_key = lambda key: [ convert(c) for c in re.split('([0-9]+)', key) ] 
     return sorted(l, key = alphanum_key)
+
+
+
+
+def load_opts(path=None, default=None):
+    """Loads a configuration Dict from 2 files:
+    1. default files with shared values across runs and users
+    2. an overriding file with run- and user-specific values
+    Args:
+        path (pathlib.Path): where to find the overriding configuration
+            default (pathlib.Path, optional): Where to find the default opts.
+            Defaults to None. In which case it is assumed to be a default config
+            which needs processing such as setting default values for lambdas and gen
+            fields
+    Returns:
+        addict.Dict: options dictionnary, with overwritten default values
+    """
+    if default is None:
+        default_opts = Dict()
+    else:
+        with open(default, "r") as f:
+            default_opts = Dict(yaml.safe_load(f))
+
+    with open(path, "r") as f:
+        overriding_opts = Dict(yaml.safe_load(f))
+
+    default_opts.update(overriding_opts)
+
+    return default_opts

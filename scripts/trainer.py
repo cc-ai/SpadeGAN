@@ -3,7 +3,7 @@ Copyright (C) 2017 NVIDIA Corporation.  All rights reserved.
 Licensed under the CC BY-NC-SA 4.0 license (https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode).
 """
 from comet_ml import Experiment
-from networks import SpadeGen, MsImageDis, VAEGen
+from networks import SpadeGen, MsImageDis, VAEGen, MultiscaleDiscriminator
 from utils import (
     weights_init,
     get_model_list,
@@ -63,10 +63,10 @@ class MUNIT_Trainer(nn.Module):
         self.gen = SpadeGen(hyperparameters["input_dim_a"], hyperparameters["gen"])
 
         # Note: the "+1" is for the masks
-        self.dis_a = MsImageDis(
+        self.dis_a = MultiscaleDiscriminator(
             hyperparameters["input_dim_a"] + 1, hyperparameters["dis"]
         )  # discriminator for domain a
-        self.dis_b = MsImageDis(
+        self.dis_b = MultiscaleDiscriminator(
             hyperparameters["input_dim_b"] + 1, hyperparameters["dis"]
         )  # discriminator for domain b
         self.instancenorm = nn.InstanceNorm2d(512, affine=False)
@@ -149,10 +149,10 @@ class MUNIT_Trainer(nn.Module):
             self.classif_sr_scheduler = get_scheduler(self.classif_opt_sr, hyperparameters)
 
         if self.use_output_classifier_sr:
-            self.output_classifier_sr_a = MsImageDis(
+            self.output_classifier_sr_a = MultiscaleDiscriminator(
                 hyperparameters["input_dim_a"], hyperparameters["dis"]
             )  # discriminator for domain a,sr
-            self.output_classifier_sr_b = MsImageDis(
+            self.output_classifier_sr_b = MultiscaleDiscriminator(
                 hyperparameters["input_dim_a"], hyperparameters["dis"]
             )  # discriminator for domain b,sr
             dann_params = list(self.output_classifier_sr_a.parameters()) + list(
@@ -348,8 +348,12 @@ class MUNIT_Trainer(nn.Module):
         # GAN loss
         # Concat masks before feeding to loss
 
-        self.loss_gen_adv_a = self.dis_a.calc_gen_loss(x_ba_augment, comet_exp, mode="a")
-        self.loss_gen_adv_b = self.dis_b.calc_gen_loss(x_ab_augment, comet_exp, mode="b")
+        self.loss_gen_adv_a = self.dis_a.calc_gen_loss(
+            x_ba_augment, x_a_augment, comet_exp, mode="a"
+        )
+        self.loss_gen_adv_b = self.dis_b.calc_gen_loss(
+            x_ab_augment, x_b_augment, comet_exp, mode="b"
+        )
 
         # domain-invariant perceptual loss
         self.loss_gen_vgg_a = (
