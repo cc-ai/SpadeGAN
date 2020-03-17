@@ -153,7 +153,7 @@ class MsImageDis(nn.Module):
 
         return total_gp
 
-    def calc_gen_loss(self, input_fake, comet_exp=None, mode=None):
+    def calc_gen_loss(self, input_fake, input_real, comet_exp=None, mode=None):
         # calculate the loss to train G
         outs0 = self.forward(input_fake)
         loss = 0
@@ -329,7 +329,8 @@ class MultiscaleDiscriminator(nn.Module):
                         * self.criterionFeat(out0[j], out1[j].detach())
                         * self.lambda_feat
                     )
-
+                if mode != None and type(mode) == str:
+                    comet_exp.log_metric("loss_gen_feat_" + mode, loss_G_GAN_Feat.cpu().detach())
                 loss += loss_G_GAN_Feat
 
             return loss
@@ -614,7 +615,7 @@ class Conv2dBlock(nn.Module):
 
         # initialize normalization
         norm_dim = output_dim
-        if norm == "bn":
+        if norm == "batch":
             self.norm = nn.BatchNorm2d(norm_dim)
         elif norm == "in":
             # self.norm = nn.InstanceNorm2d(norm_dim, track_running_stats=True)
@@ -673,7 +674,7 @@ class LinearBlock(nn.Module):
 
         # initialize normalization
         norm_dim = output_dim
-        if norm == "bn":
+        if norm == "batch":
             self.norm = nn.BatchNorm1d(norm_dim)
         elif norm == "in":
             self.norm = nn.InstanceNorm1d(norm_dim)

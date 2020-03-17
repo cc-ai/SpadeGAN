@@ -63,13 +63,24 @@ class MUNIT_Trainer(nn.Module):
         self.gen = SpadeGen(hyperparameters["input_dim_a"], hyperparameters["gen"])
 
         # Note: the "+1" is for the masks
-        self.dis_a = MultiscaleDiscriminator(
-            hyperparameters["input_dim_a"] + 1, hyperparameters["dis"]
-        )  # discriminator for domain a
-        self.dis_b = MultiscaleDiscriminator(
-            hyperparameters["input_dim_b"] + 1, hyperparameters["dis"]
-        )  # discriminator for domain b
-        self.instancenorm = nn.InstanceNorm2d(512, affine=False)
+        if hyperparameters["dis"]["type"] == "patchgan":
+            print("Using patchgan discrminator...")
+            self.dis_a = MultiscaleDiscriminator(
+                hyperparameters["input_dim_a"] + 1, hyperparameters["dis"]
+            )  # discriminator for domain a
+            self.dis_b = MultiscaleDiscriminator(
+                hyperparameters["input_dim_b"] + 1, hyperparameters["dis"]
+            )  # discriminator for domain b
+            self.instancenorm = nn.InstanceNorm2d(512, affine=False)
+
+        else:
+            self.dis_a = MsImageDis(
+                hyperparameters["input_dim_a"] + 1, hyperparameters["dis"]
+            )  # discriminator for domain a
+            self.dis_b = MsImageDis(
+                hyperparameters["input_dim_b"] + 1, hyperparameters["dis"]
+            )  # discriminator for domain b
+            self.instancenorm = nn.InstanceNorm2d(512, affine=False)
 
         # fix the noise usd in sampling
         display_size = int(hyperparameters["display_size"])
@@ -146,12 +157,22 @@ class MUNIT_Trainer(nn.Module):
             self.classif_sr_scheduler = get_scheduler(self.classif_opt_sr, hyperparameters)
 
         if self.use_output_classifier_sr:
-            self.output_classifier_sr_a = MultiscaleDiscriminator(
-                hyperparameters["input_dim_a"], hyperparameters["dis"]
-            )  # discriminator for domain a,sr
-            self.output_classifier_sr_b = MultiscaleDiscriminator(
-                hyperparameters["input_dim_a"], hyperparameters["dis"]
-            )  # discriminator for domain b,sr
+            if self.hyperparameters["dis"]["type"] == "patchgan":
+                self.output_classifier_sr_a = MultiscaleDiscriminator(
+                    hyperparameters["input_dim_a"], hyperparameters["dis"]
+                )  # discriminator for domain a,sr
+                self.output_classifier_sr_b = MultiscaleDiscriminator(
+                    hyperparameters["input_dim_a"], hyperparameters["dis"]
+                )  # discriminator for domain b,sr
+
+            else:
+                self.output_classifier_sr_a = MsImageDis(
+                    hyperparameters["input_dim_a"], hyperparameters["dis"]
+                )  # discriminator for domain a,sr
+                self.output_classifier_sr_b = MsImageDis(
+                    hyperparameters["input_dim_a"], hyperparameters["dis"]
+                )  # discriminator for domain b,sr
+
             dann_params = list(self.output_classifier_sr_a.parameters()) + list(
                 self.output_classifier_sr_b.parameters()
             )
@@ -359,6 +380,17 @@ class MUNIT_Trainer(nn.Module):
         self.loss_gen_vgg_b = (
             self.compute_vgg_loss(x_ab, x_a, mask_a) if hyperparameters["vgg_w"] > 0 else 0
         )
+        """        self.loss_destruct_vgg_a = (
+                    torch.exp(-self.compute_vgg_loss(x_ba, x_b, 1.0 - mask_b) * 0.01)
+                    if hyperparameters["vgg_w"] > 0
+                    else 0
+                )
+                self.loss_destruct_vgg_b = (
+                    torch.exp(-self.compute_vgg_loss(x_ab, x_a, 1.0 - mask_a) * 0.01)
+                    if hyperparameters["vgg_w"] > 0
+                    else 0
+                )
+        """
 
         # semantic-segmentation loss
         self.loss_sem_seg = (
@@ -436,6 +468,8 @@ class MUNIT_Trainer(nn.Module):
             if hyperparameters["vgg_w"] > 0:
                 comet_exp.log_metric("loss_gen_vgg_a", self.loss_gen_vgg_a.cpu().detach())
                 comet_exp.log_metric("loss_gen_vgg_b", self.loss_gen_vgg_b.cpu().detach())
+                # comet_exp.log_metric("loss_destruct_vgg_a", self.loss_destruct_vgg_a.cpu().detach())
+                # comet_exp.log_metric("loss_destruct_vgg_b", self.loss_destruct_vgg_b.cpu().detach())
             if hyperparameters["semantic_w"] > 0:
                 comet_exp.log_metric("loss_sem_seg", self.loss_sem_seg.cpu().detach())
             if hyperparameters["context_w"] > 0:
