@@ -66,19 +66,34 @@ class MUNIT_Trainer(nn.Module):
         if hyperparameters["dis"]["type"] == "patchgan":
             print("Using patchgan discrminator...")
             self.dis_a = MultiscaleDiscriminator(
-                hyperparameters["input_dim_a"] + 1, hyperparameters["dis"]
+                hyperparameters["input_dim_a"], hyperparameters["dis"]
             )  # discriminator for domain a
             self.dis_b = MultiscaleDiscriminator(
-                hyperparameters["input_dim_b"] + 1, hyperparameters["dis"]
+                hyperparameters["input_dim_b"], hyperparameters["dis"]
+            )  # discriminator for domain b
+            self.instancenorm = nn.InstanceNorm2d(512, affine=False)
+
+            self.dis_a_masked = MultiscaleDiscriminator(
+                hyperparameters["input_dim_a"], hyperparameters["dis"]
+            )  # discriminator for domain a
+            self.dis_b_masked = MultiscaleDiscriminator(
+                hyperparameters["input_dim_b"], hyperparameters["dis"]
             )  # discriminator for domain b
             self.instancenorm = nn.InstanceNorm2d(512, affine=False)
 
         else:
             self.dis_a = MsImageDis(
-                hyperparameters["input_dim_a"] + 1, hyperparameters["dis"]
+                hyperparameters["input_dim_a"], hyperparameters["dis"]
             )  # discriminator for domain a
             self.dis_b = MsImageDis(
-                hyperparameters["input_dim_b"] + 1, hyperparameters["dis"]
+                hyperparameters["input_dim_b"], hyperparameters["dis"]
+            )  # discriminator for domain b
+            self.instancenorm = nn.InstanceNorm2d(512, affine=False)
+            self.dis_a_masked = MsImageDis(
+                hyperparameters["input_dim_a"], hyperparameters["dis"]
+            )  # discriminator for domain a
+            self.dis_b_masked = MsImageDis(
+                hyperparameters["input_dim_b"], hyperparameters["dis"]
             )  # discriminator for domain b
             self.instancenorm = nn.InstanceNorm2d(512, affine=False)
 
@@ -87,7 +102,12 @@ class MUNIT_Trainer(nn.Module):
         # Setup the optimizers
         beta1 = hyperparameters["beta1"]
         beta2 = hyperparameters["beta2"]
-        dis_params = list(self.dis_a.parameters()) + list(self.dis_b.parameters())
+        dis_params = (
+            list(self.dis_a.parameters())
+            + list(self.dis_b.parameters())
+            + list(self.dis_a_masked.parameters())
+            + list(self.dis_b_masked.parameters())
+        )
 
         gen_params = list(self.gen.parameters())
 
@@ -110,6 +130,8 @@ class MUNIT_Trainer(nn.Module):
         self.apply(weights_init(hyperparameters["init"]))
         self.dis_a.apply(weights_init("gaussian"))
         self.dis_b.apply(weights_init("gaussian"))
+        self.dis_a_masked.apply(weights_init("gaussian"))
+        self.dis_b_masked.apply(weights_init("gaussian"))
 
         # Load VGG model if needed
         if hyperparameters["vgg_w"] > 0:
@@ -366,11 +388,16 @@ class MUNIT_Trainer(nn.Module):
         # GAN loss
         # Concat masks before feeding to loss
 
-        self.loss_gen_adv_a = self.dis_a.calc_gen_loss(
-            x_ba_augment, x_a_augment, comet_exp, mode="a"
+        self.loss_gen_adv_a = self.dis_a.calc_gen_loss(x_ba, x_a, comet_exp, mode="a")
+
+        self.loss_gen_adv_a += self.dis_a_masked.calc_gen_loss(
+            x_ba * mask_b, x_a * mask_a, comet_exp, mode="a"
         )
-        self.loss_gen_adv_b = self.dis_b.calc_gen_loss(
-            x_ab_augment, x_b_augment, comet_exp, mode="b"
+
+        self.loss_gen_adv_b = self.dis_b.calc_gen_loss(x_ab, x_b, comet_exp, mode="b")
+
+        self.loss_gen_adv_b += self.dis_b_masked.calc_gen_loss(
+            x_ab * mask_a, x_b * mask_b, comet_exp, mode="b"
         )
 
         # domain-invariant perceptual loss
@@ -740,18 +767,29 @@ class MUNIT_Trainer(nn.Module):
                 rgb1_a,
                 x_ab1,
                 rgb1_ab,
-                x_ab2,
+                x_ab1 * m_a,
                 save_m_a,
                 x_b,
                 x_b_recon,
                 rgb1_b,
                 x_ba1,
                 rgb1_ba,
-                x_ba2,
+                x_ba2 * m_b,
                 save_m_b,
             )
         else:
-            return x_a, x_a_recon, x_ab1, x_ab2, save_m_a, x_b, x_b_recon, x_ba1, x_ba2, save_m_b
+            return (
+                x_a,
+                x_a_recon,
+                x_ab1,
+                x_ab1 * m_a,
+                save_m_a,
+                x_b,
+                x_b_recon,
+                x_ba1,
+                x_ba2 * m_b,
+                save_m_b,
+            )
 
     def sample_syn(self, x_a, x_b, m_a, m_b):
         """ 
@@ -882,11 +920,16 @@ class MUNIT_Trainer(nn.Module):
         x_ab_augment = torch.cat([x_ab, m_a], dim=1)
 
         # D loss
-        self.loss_dis_a = self.dis_a.calc_dis_loss(
-            x_ba_augment.detach(), x_a_augment, comet_exp, mode="a"
+        self.loss_dis_a = self.dis_a.calc_dis_loss(x_ba.detach(), x_a, comet_exp, mode="a")
+
+        self.loss_dis_a += self.dis_a_masked.calc_dis_loss(
+            x_ba * m_b.detach(), x_a * m_a, comet_exp, mode="a"
         )
-        self.loss_dis_b = self.dis_b.calc_dis_loss(
-            x_ab_augment.detach(), x_b_augment, comet_exp, mode="b"
+
+        self.loss_dis_b = self.dis_b.calc_dis_loss(x_ab.detach(), x_b, comet_exp, mode="b")
+
+        self.loss_dis_b += self.dis_b_masked.calc_dis_loss(
+            x_ab * m_a.detach(), x_b * m_b, comet_exp, mode="b"
         )
 
         self.loss_dis_total = (

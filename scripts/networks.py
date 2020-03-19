@@ -221,6 +221,7 @@ class MsImageDis(nn.Module):
         return loss
 
 
+# Source: https://github.com/NVIDIA/pix2pixHD
 class MultiscaleDiscriminator(nn.Module):
     def __init__(self, input_nc, params):
         super(MultiscaleDiscriminator, self).__init__()
@@ -322,6 +323,7 @@ class MultiscaleDiscriminator(nn.Module):
                 assert 0, "Unsupported GAN type: {}".format(self.gan_type)
 
             if self.getIntermFeat:
+
                 for j in range(len(out0) - 1):
                     loss_G_GAN_Feat += (
                         D_weights
@@ -337,6 +339,7 @@ class MultiscaleDiscriminator(nn.Module):
 
 
 # Defines the PatchGAN discriminator with the specified arguments.
+# Source: https://github.com/NVIDIA/pix2pixHD
 class NLayerDiscriminator(nn.Module):
     def __init__(self, input_nc, params):
         # ndf=64, n_layers=3, norm_layer=nn.BatchNorm2d, use_sigmoid=False, getIntermFeat=False
@@ -715,7 +718,7 @@ class LinearBlock(nn.Module):
 ##################################################################################
 from torchvision import models
 
-
+# Source: https://github.com/NVIDIA/pix2pixHD
 class Vgg19(torch.nn.Module):
     def __init__(self, requires_grad=False):
         super(Vgg19, self).__init__()
@@ -749,6 +752,7 @@ class Vgg19(torch.nn.Module):
         return out
 
 
+# Source: https://github.com/NVIDIA/pix2pixHD
 class VGGLoss(nn.Module):
     def __init__(self):
         super(VGGLoss, self).__init__()
