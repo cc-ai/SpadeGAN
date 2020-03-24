@@ -407,17 +407,6 @@ class MUNIT_Trainer(nn.Module):
         self.loss_gen_vgg_b = (
             self.compute_vgg_loss(x_ab, x_a, mask_a) if hyperparameters["vgg_w"] > 0 else 0
         )
-        """        self.loss_destruct_vgg_a = (
-                    torch.exp(-self.compute_vgg_loss(x_ba, x_b, 1.0 - mask_b) * 0.01)
-                    if hyperparameters["vgg_w"] > 0
-                    else 0
-                )
-                self.loss_destruct_vgg_b = (
-                    torch.exp(-self.compute_vgg_loss(x_ab, x_a, 1.0 - mask_a) * 0.01)
-                    if hyperparameters["vgg_w"] > 0
-                    else 0
-                )
-        """
 
         # semantic-segmentation loss
         self.loss_sem_seg = (
@@ -495,8 +484,6 @@ class MUNIT_Trainer(nn.Module):
             if hyperparameters["vgg_w"] > 0:
                 comet_exp.log_metric("loss_gen_vgg_a", self.loss_gen_vgg_a.cpu().detach())
                 comet_exp.log_metric("loss_gen_vgg_b", self.loss_gen_vgg_b.cpu().detach())
-                # comet_exp.log_metric("loss_destruct_vgg_a", self.loss_destruct_vgg_a.cpu().detach())
-                # comet_exp.log_metric("loss_destruct_vgg_b", self.loss_destruct_vgg_b.cpu().detach())
             if hyperparameters["semantic_w"] > 0:
                 comet_exp.log_metric("loss_sem_seg", self.loss_sem_seg.cpu().detach())
             if hyperparameters["context_w"] > 0:
