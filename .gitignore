@@ -16,3 +16,5 @@ src/yaml_generator.py
 *.pyc
 .comet.config # important to prevent committing and pushing api keys
 prev_configs
+configs
+.vscode

@@ -3,7 +3,7 @@ Copyright (C) 2017 NVIDIA Corporation.  All rights reserved.
 Licensed under the CC BY-NC-SA 4.0 license (https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode).
 """
 from comet_ml import Experiment
-from networks import SpadeGen, MsImageDis, VAEGen
+from networks import SpadeGen, MsImageDis, VAEGen, MultiscaleDiscriminator, VGGLoss
 from utils import (
     weights_init,
     get_model_list,
@@ -63,13 +63,24 @@ class MUNIT_Trainer(nn.Module):
         self.gen = SpadeGen(hyperparameters["input_dim_a"], hyperparameters["gen"])
 
         # Note: the "+1" is for the masks
-        self.dis_a = MsImageDis(
-            hyperparameters["input_dim_a"] + 1, hyperparameters["dis"]
-        )  # discriminator for domain a
-        self.dis_b = MsImageDis(
-            hyperparameters["input_dim_b"] + 1, hyperparameters["dis"]
-        )  # discriminator for domain b
-        self.instancenorm = nn.InstanceNorm2d(512, affine=False)
+        if hyperparameters["dis"]["type"] == "patchgan":
+            print("Using patchgan discrminator...")
+            self.dis_a = MultiscaleDiscriminator(
+                hyperparameters["input_dim_a"] + 1, hyperparameters["dis"]
+            )  # discriminator for domain a
+            self.dis_b = MultiscaleDiscriminator(
+                hyperparameters["input_dim_b"] + 1, hyperparameters["dis"]
+            )  # discriminator for domain b
+            self.instancenorm = nn.InstanceNorm2d(512, affine=False)
+
+        else:
+            self.dis_a = MsImageDis(
+                hyperparameters["input_dim_a"] + 1, hyperparameters["dis"]
+            )  # discriminator for domain a
+            self.dis_b = MsImageDis(
+                hyperparameters["input_dim_b"] + 1, hyperparameters["dis"]
+            )  # discriminator for domain b
+            self.instancenorm = nn.InstanceNorm2d(512, affine=False)
 
         # fix the noise usd in sampling
         display_size = int(hyperparameters["display_size"])
@@ -101,11 +112,8 @@ class MUNIT_Trainer(nn.Module):
         self.dis_b.apply(weights_init("gaussian"))
 
         # Load VGG model if needed
-        if "vgg_w" in hyperparameters.keys() and hyperparameters["vgg_w"] > 0:
-            self.vgg = load_vgg16(hyperparameters["vgg_model_path"] + "/models")
-            self.vgg.eval()
-            for param in self.vgg.parameters():
-                param.requires_grad = False
+        if hyperparameters["vgg_w"] > 0:
+            self.criterionVGG = VGGLoss()
 
         # Load semantic segmentation model if needed
         if "semantic_w" in hyperparameters.keys() and hyperparameters["semantic_w"] > 0:
@@ -149,12 +157,22 @@ class MUNIT_Trainer(nn.Module):
             self.classif_sr_scheduler = get_scheduler(self.classif_opt_sr, hyperparameters)
 
         if self.use_output_classifier_sr:
-            self.output_classifier_sr_a = MsImageDis(
-                hyperparameters["input_dim_a"], hyperparameters["dis"]
-            )  # discriminator for domain a,sr
-            self.output_classifier_sr_b = MsImageDis(
-                hyperparameters["input_dim_a"], hyperparameters["dis"]
-            )  # discriminator for domain b,sr
+            if self.hyperparameters["dis"]["type"] == "patchgan":
+                self.output_classifier_sr_a = MultiscaleDiscriminator(
+                    hyperparameters["input_dim_a"], hyperparameters["dis"]
+                )  # discriminator for domain a,sr
+                self.output_classifier_sr_b = MultiscaleDiscriminator(
+                    hyperparameters["input_dim_a"], hyperparameters["dis"]
+                )  # discriminator for domain b,sr
+
+            else:
+                self.output_classifier_sr_a = MsImageDis(
+                    hyperparameters["input_dim_a"], hyperparameters["dis"]
+                )  # discriminator for domain a,sr
+                self.output_classifier_sr_b = MsImageDis(
+                    hyperparameters["input_dim_a"], hyperparameters["dis"]
+                )  # discriminator for domain b,sr
+
             dann_params = list(self.output_classifier_sr_a.parameters()) + list(
                 self.output_classifier_sr_b.parameters()
             )
@@ -348,15 +366,19 @@ class MUNIT_Trainer(nn.Module):
         # GAN loss
         # Concat masks before feeding to loss
 
-        self.loss_gen_adv_a = self.dis_a.calc_gen_loss(x_ba_augment, comet_exp, mode="a")
-        self.loss_gen_adv_b = self.dis_b.calc_gen_loss(x_ab_augment, comet_exp, mode="b")
+        self.loss_gen_adv_a = self.dis_a.calc_gen_loss(
+            x_ba_augment, x_a_augment, comet_exp, mode="a"
+        )
+        self.loss_gen_adv_b = self.dis_b.calc_gen_loss(
+            x_ab_augment, x_b_augment, comet_exp, mode="b"
+        )
 
         # domain-invariant perceptual loss
         self.loss_gen_vgg_a = (
-            self.compute_vgg_loss(self.vgg, x_ba, x_b) if hyperparameters["vgg_w"] > 0 else 0
+            self.compute_vgg_loss(x_ba, x_b, mask_b) if hyperparameters["vgg_w"] > 0 else 0
         )
         self.loss_gen_vgg_b = (
-            self.compute_vgg_loss(self.vgg, x_ab, x_a) if hyperparameters["vgg_w"] > 0 else 0
+            self.compute_vgg_loss(x_ab, x_a, mask_a) if hyperparameters["vgg_w"] > 0 else 0
         )
 
         # semantic-segmentation loss
@@ -454,7 +476,7 @@ class MUNIT_Trainer(nn.Module):
                     "loss_output_classifier_adv_sr", self.loss_output_classifier_sr.cpu().detach()
                 )
 
-    def compute_vgg_loss(self, vgg, img, target):
+    def compute_vgg_loss(self, img, target, mask):
         """ 
         Compute the domain-invariant perceptual loss
         
@@ -468,9 +490,14 @@ class MUNIT_Trainer(nn.Module):
         """
         img_vgg = vgg_preprocess(img)
         target_vgg = vgg_preprocess(target)
-        img_fea = vgg(img_vgg)
-        target_fea = vgg(target_vgg)
-        return torch.mean((self.instancenorm(img_fea) - self.instancenorm(target_fea)) ** 2)
+
+        # Mask input to VGG:
+        img_vgg = img_vgg * (1.0 - mask)
+        target_vgg = target_vgg * (1.0 - mask)
+
+        loss_G_VGG = self.criterionVGG(img_vgg, target_vgg)
+
+        return loss_G_VGG
 
     def compute_classifier_sr_loss(self, c_a, c_b, domain_synth=False, fool=False):
         """ 
