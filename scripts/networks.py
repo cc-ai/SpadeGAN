@@ -1085,6 +1085,9 @@ class SpadeDecoder(nn.Module):
             spade_kernel_size,
         )
 
+        self.nospade_1 = ResBlock(self.z_nc)
+
+        """
         self.up_spades = nn.Sequential(
             *[
                 SPADEResnetBlock(
@@ -1098,9 +1101,11 @@ class SpadeDecoder(nn.Module):
                 for i in range(spade_n_up - 2)
             ]
         )
+        """
+        self.up_spades = nn.Sequential(*[ResBlock(self.z_nc) for i in range(spade_n_up - 2)])
 
-        self.final_nc = self.z_nc // 2 ** (spade_n_up - 2)
-
+        # self.final_nc = self.z_nc // 2 ** (spade_n_up - 2)
+        self.final_nc = self.z_nc
         self.conv_img = nn.Conv2d(self.final_nc, 3, 3, padding=1)
 
         self.upsample = nn.Upsample(scale_factor=2)
@@ -1122,11 +1127,18 @@ class SpadeDecoder(nn.Module):
         y = self.upsample(y)
         y = self.G_middle_0(y, cond)
         y = self.upsample(y)
-        y = self.G_middle_1(y, cond)
+        # y = self.G_middle_1(y, cond)
+        y = self.nospade_1(y)
 
+        """
         for i, up in enumerate(self.up_spades):
             y = self.upsample(y)
             y = up(y, cond)
+        """
+
+        for i, up in enumerate(self.up_spades):
+            y = self.upsample(y)
+            y = up(y)
 
         y = self.conv_img(F.leaky_relu(y, 2e-1))
         y = torch.tanh(y)
@@ -1201,4 +1213,3 @@ class SpadeGen(nn.Module):
             print("wrong value for encoder_name, must be 0 or 1")
             return None
         return images
-

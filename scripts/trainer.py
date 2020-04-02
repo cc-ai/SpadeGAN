@@ -61,7 +61,7 @@ class MUNIT_Trainer(nn.Module):
         else:
             self.use_output_classifier_sr = False
 
-        self.gen = SpadeGen(hyperparameters["input_dim_a"], hyperparameters["gen"])
+        self.gen = SpadeGen(hyperparameters["input_dim_a"] + 1, hyperparameters["gen"])
 
         # Note: the "+1" is for the masks
         if hyperparameters["dis"]["type"] == "patchgan":
@@ -276,8 +276,8 @@ class MUNIT_Trainer(nn.Module):
         x_a_augment = torch.cat([x_a, m_a], dim=1)
         x_b_augment = torch.cat([x_b, m_b], dim=1)
 
-        c_a = self.gen.encode(x_a * (1.0 - m_a) + avg_mask_a, 1)
-        c_b = self.gen.encode(x_b * (1.0 - m_b) + avg_mask_b, 2)
+        c_a = self.gen.encode(x_a_augment, 1)
+        c_b = self.gen.encode(x_b_augment, 2)
 
         x_ba = self.gen.decode(c_b, m_b_seg, 1)
         x_ab = self.gen.decode(c_a, m_a_seg, 2)
@@ -322,9 +322,12 @@ class MUNIT_Trainer(nn.Module):
         avg_mask_a = self.average_mask(x_a, mask_a)
         avg_mask_b = self.average_mask(x_b, mask_b)
 
+        x_a_augment = torch.cat([x_a, mask_a], dim=1)
+        x_b_augment = torch.cat([x_b, mask_b], dim=1)
+
         # encode
-        c_a = self.gen.encode(x_a * (1.0 - mask_a) + avg_mask_a, 1)
-        c_b = self.gen.encode(x_b * (1.0 - mask_b) + avg_mask_b, 2)
+        c_a = self.gen.encode(x_a_augment, 1)
+        c_b = self.gen.encode(x_b_augment, 2)
 
         # decode (within domain)
         x_a_recon = self.gen.decode(c_a, mask_a_seg, 1)
@@ -333,9 +336,12 @@ class MUNIT_Trainer(nn.Module):
         x_ba = self.gen.decode(c_b, mask_b_seg, 1)
         x_ab = self.gen.decode(c_a, mask_a_seg, 2)
 
+        x_ba_augment = torch.cat([x_ba, mask_b], dim=1)
+        x_ab_augment = torch.cat([x_ab, mask_a], dim=1)
+
         # encode again
-        c_b_recon = self.gen.encode(x_ba * (1.0 - mask_b) + avg_mask_b, 1)
-        c_a_recon = self.gen.encode(x_ab * (1.0 - mask_a) + avg_mask_a, 2)
+        c_b_recon = self.gen.encode(x_ba_augment, 1)
+        c_a_recon = self.gen.encode(x_ab_augment, 2)
 
         # decode again (if needed)
         x_aba = (
@@ -350,11 +356,11 @@ class MUNIT_Trainer(nn.Module):
         )
 
         # reconstruction loss
-        self.loss_gen_recon_x_a = self.recon_criterion(x_a_recon, x_a * (1.0 - mask_a) + avg_mask_a)
-        self.loss_gen_recon_x_b = self.recon_criterion(x_b_recon, x_b * (1.0 - mask_b) + avg_mask_b)
+        # self.loss_gen_recon_x_a = self.recon_criterion(x_a_recon, x_a * (1.0 - mask_a) + avg_mask_a)
+        # self.loss_gen_recon_x_b = self.recon_criterion(x_b_recon, x_b * (1.0 - mask_b) + avg_mask_b)
 
-        # self.loss_gen_recon_x_a = self.recon_criterion_mask(x_a_recon, x_a, mask_a)
-        # self.loss_gen_recon_x_b = self.recon_criterion_mask(x_b_recon, x_b, mask_b)
+        self.loss_gen_recon_x_a = self.recon_criterion_mask(x_a_recon, x_a, mask_a)
+        self.loss_gen_recon_x_b = self.recon_criterion_mask(x_b_recon, x_b, mask_b)
 
         # Contex preserving loss
         self.context_loss = self.recon_criterion_mask(
@@ -706,6 +712,7 @@ class MUNIT_Trainer(nn.Module):
         return output_mask
 
     def average_mask(self, img, mask):
+        """
         # Apply mask:
         mask_region = img * mask
 
@@ -714,6 +721,11 @@ class MUNIT_Trainer(nn.Module):
         avg = avg.unsqueeze(-1).unsqueeze(-1)
 
         masked_avg = mask * avg
+        """
+
+        # Return random noise
+        masked_avg = torch.normal(mean=0, std=1, size=mask.size(), device="cuda")
+        masked_avg = masked_avg * mask
         return masked_avg
 
     def sample(self, x_a, x_b, m_a, m_b):
@@ -743,12 +755,8 @@ class MUNIT_Trainer(nn.Module):
         x_b_augment = torch.cat([x_b, m_b], dim=1)
 
         for i in range(x_a.size(0)):
-            c_a = self.gen.encode(
-                x_a[i].unsqueeze(0) * (1.0 - m_a[i].unsqueeze(0)) + avg_mask_a[i], 1
-            )
-            c_b = self.gen.encode(
-                x_b[i].unsqueeze(0) * (1.0 - m_b[i].unsqueeze(0)) + avg_mask_b[i], 2
-            )
+            c_a = self.gen.encode(x_a_augment[i].unsqueeze(0), 1)
+            c_b = self.gen.encode(x_b_augment[i].unsqueeze(0), 2)
 
             x_a_recon.append(self.gen.decode(c_a, m_a_seg[i].unsqueeze(0), 1))
             x_b_recon.append(self.gen.decode(c_b, m_b_seg[i].unsqueeze(0), 2))
@@ -975,8 +983,8 @@ class MUNIT_Trainer(nn.Module):
         avg_mask_b = self.average_mask(x_b, m_b)
 
         # encode
-        c_a = self.gen.encode(x_a * (1.0 - m_a) + avg_mask_a, 1)
-        c_b = self.gen.encode(x_b * (1.0 - m_b) + avg_mask_b, 2)
+        c_a = self.gen.encode(x_a_augment, 1)
+        c_b = self.gen.encode(x_b_augment, 2)
         # decode (cross domain)
         x_ba = self.gen.decode(c_b, m_b_seg, 1)
         x_ab = self.gen.decode(c_a, m_a_seg, 2)
