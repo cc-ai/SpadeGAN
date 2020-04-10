@@ -1,3 +1,10 @@
+#Branches
+
+|branch|comment|active|
+|:-----|:-----:|:-:|
+|seg_spade|Condition the decoder using segmentation in addition to masks |No|
+|spadecutoff|Cut off spade at early spatial resolution to allow model to smooth flooding| Yes (Sun)|
+
 # Introduction
 
 <p style="text-align:justify;" >
