@@ -751,7 +751,6 @@ class Vgg19(torch.nn.Module):
         out = [h_relu1, h_relu2, h_relu3, h_relu4, h_relu5]
         return out
 
-
 # Source: https://github.com/NVIDIA/pix2pixHD
 class VGGLoss(nn.Module):
     def __init__(self):
