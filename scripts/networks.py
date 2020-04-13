@@ -1085,6 +1085,7 @@ class SpadeDecoder(nn.Module):
             spade_kernel_size,
         )
 
+        # self.nospade_0 = ResBlock(self.z_nc)
         self.nospade_1 = ResBlock(self.z_nc)
 
         """
@@ -1125,6 +1126,7 @@ class SpadeDecoder(nn.Module):
         y = self.head_0(z, cond)
 
         y = self.upsample(y)
+        # y = self.nospade_0(y)
         y = self.G_middle_0(y, cond)
         y = self.upsample(y)
         # y = self.G_middle_1(y, cond)
@@ -1166,7 +1168,7 @@ class SpadeGen(nn.Module):
             n_downsample, n_res, input_dim, dim, "in", activ, pad_type=pad_type
         )
 
-        latent_dim = dim * (2 ** n_downsample)
+        latent_dim = self.enc1_content.output_dim
 
         self.dec1 = SpadeDecoder(
             latent_dim=latent_dim,

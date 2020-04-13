@@ -312,6 +312,7 @@ if config["semantic_w"] != 0 or True:
                                 images_as,
                                 images_bs,
                                 mask_s,
+                                mask_s,
                                 True,
                                 config["adaptation"]["dfeat_lambda"],
                                 iterations + 1,

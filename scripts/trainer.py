@@ -18,6 +18,7 @@ from utils import (
     decode_segmap,
     domainClassifier,
     merge_classes,
+    tv_loss,
 )
 from torch.autograd import Variable
 from torchvision import transforms
@@ -267,11 +268,11 @@ class MUNIT_Trainer(nn.Module):
             torch.Tensor, torch.Tensor -- Translated version of x_a in domain B, Translated version of x_b in domain A
         """
         self.eval()
-        m_a_seg = self.merge_seg_with_mask(x_a, m_a)
-        m_b_seg = self.merge_seg_with_mask(x_b, m_b)
+        # m_a_seg = self.merge_seg_with_mask(x_a, m_a)
+        # m_b_seg = self.merge_seg_with_mask(x_b, m_b)
 
-        avg_mask_a = self.average_mask(x_a, m_a)
-        avg_mask_b = self.average_mask(x_b, m_b)
+        # avg_mask_a = self.average_mask(x_a, m_a)
+        # avg_mask_b = self.average_mask(x_b, m_b)
 
         x_a_augment = torch.cat([x_a, m_a], dim=1)
         x_b_augment = torch.cat([x_b, m_b], dim=1)
@@ -279,8 +280,8 @@ class MUNIT_Trainer(nn.Module):
         c_a = self.gen.encode(x_a_augment, 1)
         c_b = self.gen.encode(x_b_augment, 2)
 
-        x_ba = self.gen.decode(c_b, m_b_seg, 1)
-        x_ab = self.gen.decode(c_a, m_a_seg, 2)
+        x_ba = self.gen.decode(c_b, m_b, 1)
+        x_ab = self.gen.decode(c_a, m_a, 2)
 
         self.train()
         return x_ab, x_ba
@@ -316,8 +317,8 @@ class MUNIT_Trainer(nn.Module):
         """
         self.gen_opt.zero_grad()
 
-        mask_a_seg = self.merge_seg_with_mask(x_a, mask_a)
-        mask_b_seg = self.merge_seg_with_mask(x_b, mask_b)
+        # mask_a_seg = self.merge_seg_with_mask(x_a, mask_a)
+        # mask_b_seg = self.merge_seg_with_mask(x_b, mask_b)
 
         avg_mask_a = self.average_mask(x_a, mask_a)
         avg_mask_b = self.average_mask(x_b, mask_b)
@@ -330,11 +331,11 @@ class MUNIT_Trainer(nn.Module):
         c_b = self.gen.encode(x_b_augment, 2)
 
         # decode (within domain)
-        x_a_recon = self.gen.decode(c_a, mask_a_seg, 1)
-        x_b_recon = self.gen.decode(c_b, mask_b_seg, 2)
+        x_a_recon = self.gen.decode(c_a, mask_a, 1)
+        x_b_recon = self.gen.decode(c_b, mask_b, 2)
 
-        x_ba = self.gen.decode(c_b, mask_b_seg, 1)
-        x_ab = self.gen.decode(c_a, mask_a_seg, 2)
+        x_ba = self.gen.decode(c_b, mask_b, 1)
+        x_ab = self.gen.decode(c_a, mask_a, 2)
 
         x_ba_augment = torch.cat([x_ba, mask_b], dim=1)
         x_ab_augment = torch.cat([x_ab, mask_a], dim=1)
@@ -345,14 +346,10 @@ class MUNIT_Trainer(nn.Module):
 
         # decode again (if needed)
         x_aba = (
-            self.gen.decode(c_a_recon, mask_a_seg, 1)
-            if hyperparameters["recon_x_cyc_w"] > 0
-            else None
+            self.gen.decode(c_a_recon, mask_a, 1) if hyperparameters["recon_x_cyc_w"] > 0 else None
         )
         x_bab = (
-            self.gen.decode(c_b_recon, mask_b_seg, 2)
-            if hyperparameters["recon_x_cyc_w"] > 0
-            else None
+            self.gen.decode(c_b_recon, mask_b, 2) if hyperparameters["recon_x_cyc_w"] > 0 else None
         )
 
         # reconstruction loss
@@ -361,6 +358,13 @@ class MUNIT_Trainer(nn.Module):
 
         self.loss_gen_recon_x_a = self.recon_criterion_mask(x_a_recon, x_a, mask_a)
         self.loss_gen_recon_x_b = self.recon_criterion_mask(x_b_recon, x_b, mask_b)
+
+        # Total variational loss for smoothness:
+        x_ab_masked = x_ab * mask_a
+        x_ba_masked = x_ba * mask_b
+        self.loss_tv = tv_loss(x_ab_masked, hyperparameters["tv_w"]) + tv_loss(
+            x_ba_masked, hyperparameters["tv_w"]
+        )
 
         # Contex preserving loss
         self.context_loss = self.recon_criterion_mask(
@@ -475,6 +479,7 @@ class MUNIT_Trainer(nn.Module):
             + hyperparameters["recon_synth_w"] * self.loss_gen_recon_synth
             + hyperparameters["adaptation"]["adv_lambda"] * self.loss_classifier_sr
             + hyperparameters["adaptation"]["output_adv_lambda"] * self.loss_output_classifier_sr
+            + self.loss_tv
         )
 
         self.loss_gen_total.backward()
@@ -522,6 +527,8 @@ class MUNIT_Trainer(nn.Module):
                 comet_exp.log_metric(
                     "loss_output_classifier_adv_sr", self.loss_output_classifier_sr.cpu().detach()
                 )
+            if hyperparameters["tv_w"] > 0:
+                comet_exp.log_metric("tv loss", self.loss_tv.cpu().detach())
 
     def compute_vgg_loss(self, img, target, mask):
         """ 
@@ -743,8 +750,8 @@ class MUNIT_Trainer(nn.Module):
         """
 
         self.eval()
-        m_a_seg = self.merge_seg_with_mask(x_a, m_a)
-        m_b_seg = self.merge_seg_with_mask(x_b, m_b)
+        # m_a_seg = self.merge_seg_with_mask(x_a, m_a)
+        # m_b_seg = self.merge_seg_with_mask(x_b, m_b)
 
         avg_mask_a = self.average_mask(x_a, m_a)
         avg_mask_b = self.average_mask(x_b, m_b)
@@ -758,13 +765,13 @@ class MUNIT_Trainer(nn.Module):
             c_a = self.gen.encode(x_a_augment[i].unsqueeze(0), 1)
             c_b = self.gen.encode(x_b_augment[i].unsqueeze(0), 2)
 
-            x_a_recon.append(self.gen.decode(c_a, m_a_seg[i].unsqueeze(0), 1))
-            x_b_recon.append(self.gen.decode(c_b, m_b_seg[i].unsqueeze(0), 2))
+            x_a_recon.append(self.gen.decode(c_a, m_a[i].unsqueeze(0), 1))
+            x_b_recon.append(self.gen.decode(c_b, m_b[i].unsqueeze(0), 2))
 
-            x_ba1.append(self.gen.decode(c_b, m_b_seg[i].unsqueeze(0), 1))  # s_a1[i].unsqueeze(0)))
-            x_ba2.append(self.gen.decode(c_b, m_b_seg[i].unsqueeze(0), 1))  # s_a2[i].unsqueeze(0)))
-            x_ab1.append(self.gen.decode(c_a, m_a_seg[i].unsqueeze(0), 2))  # s_b1[i].unsqueeze(0)))
-            x_ab2.append(self.gen.decode(c_a, m_a_seg[i].unsqueeze(0), 2))  # s_b2[i].unsqueeze(0)))
+            x_ba1.append(self.gen.decode(c_b, m_b[i].unsqueeze(0), 1))  # s_a1[i].unsqueeze(0)))
+            x_ba2.append(self.gen.decode(c_b, m_b[i].unsqueeze(0), 1))  # s_a2[i].unsqueeze(0)))
+            x_ab1.append(self.gen.decode(c_a, m_a[i].unsqueeze(0), 2))  # s_b1[i].unsqueeze(0)))
+            x_ab2.append(self.gen.decode(c_a, m_a[i].unsqueeze(0), 2))  # s_b2[i].unsqueeze(0)))
 
         x_a_recon, x_b_recon = torch.cat(x_a_recon), torch.cat(x_b_recon)
         x_ba1, x_ba2 = torch.cat(x_ba1), torch.cat(x_ba2)
@@ -875,8 +882,8 @@ class MUNIT_Trainer(nn.Module):
         x_b_augment = torch.cat([x_b, m_b], dim=1)
 
         for i in range(x_a.size(0)):
-            c_a = self.gen.encode(x_a[i].unsqueeze(0), 1)
-            c_b = self.gen.encode(x_b[i].unsqueeze(0), 2)
+            c_a = self.gen.encode(x_a_augment[i].unsqueeze(0), 1)
+            c_b = self.gen.encode(x_b_augment[i].unsqueeze(0), 2)
             x_a_recon.append(self.gen.decode(c_a, m_a[i].unsqueeze(0), 1))
             x_b_recon.append(self.gen.decode(c_b, m_b[i].unsqueeze(0), 2))
 
@@ -972,8 +979,8 @@ class MUNIT_Trainer(nn.Module):
 
         self.dis_opt.zero_grad()
 
-        m_a_seg = self.merge_seg_with_mask(x_a, m_a)
-        m_b_seg = self.merge_seg_with_mask(x_b, m_b)
+        # m_a_seg = self.merge_seg_with_mask(x_a, m_a)
+        # m_b_seg = self.merge_seg_with_mask(x_b, m_b)
 
         x_a_augment = torch.cat([x_a, m_a], dim=1)
         x_b_augment = torch.cat([x_b, m_b], dim=1)
@@ -986,8 +993,8 @@ class MUNIT_Trainer(nn.Module):
         c_a = self.gen.encode(x_a_augment, 1)
         c_b = self.gen.encode(x_b_augment, 2)
         # decode (cross domain)
-        x_ba = self.gen.decode(c_b, m_b_seg, 1)
-        x_ab = self.gen.decode(c_a, m_a_seg, 2)
+        x_ba = self.gen.decode(c_b, m_b, 1)
+        x_ab = self.gen.decode(c_a, m_a, 2)
 
         x_ba_augment = torch.cat([x_ba, m_b], dim=1)
         x_ab_augment = torch.cat([x_ab, m_a], dim=1)
@@ -1029,9 +1036,12 @@ class MUNIT_Trainer(nn.Module):
         """
         self.dann_opt.zero_grad()
 
+        x_a_augment = torch.cat([x_a, m_a], dim=1)
+        x_b_augment = torch.cat([x_b, m_a], dim=1)
+
         # encode
-        c_a = self.gen.encode(x_a, 1)
-        c_b = self.gen.encode(x_b, 2)
+        c_a = self.gen.encode(x_a_augment, 1)
+        c_b = self.gen.encode(x_b_augment, 2)
 
         # domain classifier loss
         self.domain_class_loss, out_a, out_b = self.compute_domain_adv_loss(
@@ -1052,9 +1062,12 @@ class MUNIT_Trainer(nn.Module):
 
         self.classif_opt_sr.zero_grad()
 
+        x_a_augment = torch.cat([x_a, m_a], dim=1)
+        x_b_augment = torch.cat([x_b, m_a], dim=1)
+
         # encode
-        c_a = self.gen.encode(x_a, 1)
-        c_b = self.gen.encode(x_b, 2)
+        c_a = self.gen.encode(x_a_augment, 1)
+        c_b = self.gen.encode(x_b_augment, 2)
 
         # noise = c_a.data.new(c_a.size()).normal_(0, 1)
         loss = self.compute_classifier_sr_loss(c_a.detach(), c_b.detach(), domain_synth, fool=False)

@@ -518,7 +518,7 @@ class MyDatasetSynthetic(Dataset):
         # print('dim image after resize',image.size)
 
         # Resize mask
-        #mask = mask.resize((image_b.width, image_b.height), Image.NEAREST)
+        # mask = mask.resize((image_b.width, image_b.height), Image.NEAREST)
         mask = resize(mask)
         semantic_a = semantic_a.resize((image_b.width, image_b.height), Image.NEAREST)
         semantic_b = semantic_b.resize((image_b.width, image_b.height), Image.NEAREST)
@@ -1348,7 +1348,7 @@ class domainClassifier(nn.Module):
         self.BasicBlock1 = BasicBlock(input_dim, 128, True)
         self.max_pool2 = nn.MaxPool2d(2)
         self.BasicBlock2 = BasicBlock(128, 64, True)
-        self.avg_pool = nn.AvgPool2d((16, 16))
+        self.avg_pool = nn.AvgPool2d((8, 8))
         self.fc = nn.Linear(64, 1)
         self.output_dim = dim
 
@@ -1408,13 +1408,11 @@ def flatten_opts(opts):
     return dict(values_list)
 
 
-def sorted_nicely( l ): 
-    """ Sort the given iterable in the way that humans expect.""" 
-    convert = lambda text: int(text) if text.isdigit() else text 
-    alphanum_key = lambda key: [ convert(c) for c in re.split('([0-9]+)', key) ] 
-    return sorted(l, key = alphanum_key)
-
-
+def sorted_nicely(l):
+    """ Sort the given iterable in the way that humans expect."""
+    convert = lambda text: int(text) if text.isdigit() else text
+    alphanum_key = lambda key: [convert(c) for c in re.split("([0-9]+)", key)]
+    return sorted(l, key=alphanum_key)
 
 
 def load_opts(path=None, default=None):
@@ -1442,3 +1440,19 @@ def load_opts(path=None, default=None):
     default_opts.update(overriding_opts)
 
     return default_opts
+
+
+def tv_loss(img, tv_weight):
+    """
+    Compute total variation loss.
+    Inputs:
+    - img: PyTorch Variable of shape (1, 3, H, W) holding an input image.
+    - tv_weight: Scalar giving the weight w_t to use for the TV loss.
+    Returns:
+    - loss: PyTorch Variable holding a scalar giving the total variation loss
+      for img weighted by tv_weight.
+    """
+    w_variance = torch.sum(torch.pow(img[:, :, :, :-1] - img[:, :, :, 1:], 2))
+    h_variance = torch.sum(torch.pow(img[:, :, :-1, :] - img[:, :, 1:, :], 2))
+    loss = tv_weight * (h_variance + w_variance)
+    return loss

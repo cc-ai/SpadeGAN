@@ -59,11 +59,11 @@ config["vgg_model_path"] = opts.output_path
 trainer = MUNIT_Trainer(config)
 
 # Load the model (here we currently only load the latest model architecture: one single style)
-try:
-    state_dict = torch.load(opts.checkpoint)
-    trainer.gen.load_state_dict(state_dict["2"])
-except:
-    sys.exit("Cannot load the checkpoints")
+# try:
+state_dict = torch.load(opts.checkpoint)
+trainer.gen.load_state_dict(state_dict["2"])
+# except:
+#    sys.exit("Cannot load the checkpoints")
 
 # Send the trainer to cuda
 trainer.cuda()
