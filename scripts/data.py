@@ -4,6 +4,7 @@ Licensed under the CC BY-NC-SA 4.0 license (https://creativecommons.org/licenses
 """
 import torch.utils.data as data
 import os.path
+from pathlib import Path
 
 
 def default_loader(path):
@@ -92,22 +93,13 @@ from PIL import Image
 import os
 import os.path
 
-IMG_EXTENSIONS = [
-    ".jpg",
-    ".JPG",
-    ".jpeg",
-    ".JPEG",
-    ".png",
-    ".PNG",
-    ".ppm",
-    ".PPM",
-    ".bmp",
-    ".BMP",
-]
+IMG_EXTENSIONS = set(
+    [".jpg", ".JPG", ".jpeg", ".JPEG", ".png", ".PNG", ".ppm", ".PPM", ".bmp", ".BMP"]
+)
 
 
 def is_image_file(filename):
-    return any(filename.endswith(extension) for extension in IMG_EXTENSIONS)
+    return Path(filename).suffix in IMG_EXTENSIONS
 
 
 def make_dataset(dir):
