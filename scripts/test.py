@@ -157,7 +157,8 @@ with torch.no_grad():
             vutils.save_image(save_m_a, str(path), padding=0, normalize=True)
 
         # Extract content and style
-        c_a = trainer.gen.encode(x_a, 1)
+        x_a_augment = torch.cat([x_a, mask], dim=1)
+        c_a = trainer.gen.encode(x_a_augment, 1)
 
         # Perform cross domain translation
         x_ab = trainer.gen.decode(c_a, mask, 2)
