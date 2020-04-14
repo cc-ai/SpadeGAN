@@ -225,7 +225,9 @@ def get_data_loader_list(
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
     ]
     transform_list = (
-        [transforms.RandomCrop((height, width))] + transform_list if crop else transform_list
+        [transforms.RandomCrop((height, width))] + transform_list
+        if crop
+        else transform_list
     )
     transform_list = (
         [transforms.Resize((new_size, new_size))] + transform_list
@@ -233,7 +235,9 @@ def get_data_loader_list(
         else transform_list
     )
     transform_list = (
-        [transforms.RandomHorizontalFlip()] + transform_list if train else transform_list
+        [transforms.RandomHorizontalFlip()] + transform_list
+        if train
+        else transform_list
     )
     transform = transforms.Compose(transform_list)
     dataset = ImageFilelist(root, file_list, transform=transform)
@@ -314,7 +318,9 @@ class MyDataset(Dataset):
         image = resize(image)
         to_tensor = transforms.ToTensor()
         # Random crop
-        i, j, h, w = transforms.RandomCrop.get_params(image, output_size=(self.height, self.width))
+        i, j, h, w = transforms.RandomCrop.get_params(
+            image, output_size=(self.height, self.width)
+        )
         image = F.crop(image, i, j, h, w)
 
         if type(mask) is not torch.Tensor:
@@ -436,7 +442,9 @@ class DatasetInferenceFID(Dataset):
         return len(self.image_paths)
 
 
-def get_fid_data_loader(file_list_a, file_list_b, batch_size, train, new_size=256, num_workers=4):
+def get_fid_data_loader(
+    file_list_a, file_list_b, batch_size, train, new_size=256, num_workers=4
+):
     """
     Masks and images lists-based data loader with transformations
     (horizontal flip, resizing, random crop, normalization are handled)
@@ -518,7 +526,7 @@ class MyDatasetSynthetic(Dataset):
         # print('dim image after resize',image.size)
 
         # Resize mask
-        #mask = mask.resize((image_b.width, image_b.height), Image.NEAREST)
+        # mask = mask.resize((image_b.width, image_b.height), Image.NEAREST)
         mask = resize(mask)
         semantic_a = semantic_a.resize((image_b.width, image_b.height), Image.NEAREST)
         semantic_b = semantic_b.resize((image_b.width, image_b.height), Image.NEAREST)
@@ -627,7 +635,14 @@ def get_synthetic_data_loader(
         loader -- data loader with transformed dataset
     """
     dataset = MyDatasetSynthetic(
-        file_list_a, file_list_b, mask_list, sem_list_a, sem_list_b, new_size, height, width,
+        file_list_a,
+        file_list_b,
+        mask_list,
+        sem_list_a,
+        sem_list_b,
+        new_size,
+        height,
+        width,
     )
     loader = DataLoader(
         dataset=dataset,
@@ -682,7 +697,14 @@ def get_data_loader_mask_and_im(
 
 
 def get_data_loader_folder(
-    input_folder, batch_size, train, new_size=None, height=256, width=256, num_workers=4, crop=True,
+    input_folder,
+    batch_size,
+    train,
+    new_size=None,
+    height=256,
+    width=256,
+    num_workers=4,
+    crop=True,
 ):
     """
     Folder-based data loader with transformations
@@ -711,7 +733,9 @@ def get_data_loader_folder(
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
     ]
     transform_list = (
-        [transforms.RandomCrop((height, width))] + transform_list if crop else transform_list
+        [transforms.RandomCrop((height, width))] + transform_list
+        if crop
+        else transform_list
     )
     transform_list = (
         [transforms.Resize((new_size, new_size))] + transform_list
@@ -719,7 +743,9 @@ def get_data_loader_folder(
         else transform_list
     )
     transform_list = (
-        [transforms.RandomHorizontalFlip()] + transform_list if train else transform_list
+        [transforms.RandomHorizontalFlip()] + transform_list
+        if train
+        else transform_list
     )
     transform = transforms.Compose(transform_list)
     dataset = ImageFolder(input_folder, transform=transform)
@@ -763,14 +789,18 @@ def __write_images(image_outputs, display_image_num, file_name):
     image_outputs = [
         images.expand(-1, 3, -1, -1) for images in image_outputs
     ]  # expand gray-scale images to 3 channels
-    image_tensor = torch.cat([images[:display_image_num] for images in image_outputs], 0)
+    image_tensor = torch.cat(
+        [images[:display_image_num] for images in image_outputs], 0
+    )
     image_grid = vutils.make_grid(
         image_tensor.data, nrow=display_image_num, padding=0, normalize=True
     )
     vutils.save_image(image_grid, file_name, nrow=1)
 
 
-def write_2images(image_outputs, display_image_num, image_directory, postfix, comet_exp=None):
+def write_2images(
+    image_outputs, display_image_num, image_directory, postfix, comet_exp=None
+):
     """Write images from both worlds a and b of the cycle  A-B-A as jpg
     Arguments:
         image_outputs {Tensor list} -- list of images, the first half being outputs in B,
@@ -859,7 +889,9 @@ def get_slerp_interp(nb_latents, nb_interp, z_dim):
         low = np.random.randn(z_dim)
         high = np.random.randn(z_dim)  # low + np.random.randn(512) * 0.7
         interp_vals = np.linspace(0, 1, num=nb_interp)
-        latent_interp = np.array([slerp(v, low, high) for v in interp_vals], dtype=np.float32)
+        latent_interp = np.array(
+            [slerp(v, low, high) for v in interp_vals], dtype=np.float32
+        )
         latent_interps = np.vstack((latent_interps, latent_interp))
 
     return latent_interps[:, :, np.newaxis, np.newaxis]
@@ -919,7 +951,10 @@ class Resnet34_8s(nn.Module):
         # Load the pretrained weights, remove avg pool
         # layer and get the output stride of 8
         resnet34_8s = resnet34(
-            fully_conv=True, pretrained=True, output_stride=8, remove_avg_pool_layer=True,
+            fully_conv=True,
+            pretrained=True,
+            output_stride=8,
+            remove_avg_pool_layer=True,
         )
 
         # Randomly initialize the 1x1 Conv scoring layer
@@ -1070,7 +1105,9 @@ def get_scheduler(optimizer, hyperparameters, iterations=-1):
 def weights_init(init_type="gaussian"):
     def init_fun(m):
         classname = m.__class__.__name__
-        if (classname.find("Conv") == 0 or classname.find("Linear") == 0) and hasattr(m, "weight"):
+        if (classname.find("Conv") == 0 or classname.find("Linear") == 0) and hasattr(
+            m, "weight"
+        ):
             # print m.__class__.__name__
             if init_type == "gaussian":
                 init.normal_(m.weight.data, 0.0, 0.02)
@@ -1279,7 +1316,9 @@ class BasicBlock(nn.Module):
         self.stride = stride
         self.downsample = downsample
         if stride != 1 or inplanes != planes:
-            self.downsample = nn.Sequential(conv1x1(inplanes, planes, stride), norm_layer(planes))
+            self.downsample = nn.Sequential(
+                conv1x1(inplanes, planes, stride), norm_layer(planes)
+            )
 
     def forward(self, x):
         identity = x
@@ -1408,12 +1447,11 @@ def flatten_opts(opts):
     return dict(values_list)
 
 
-def sorted_nicely( l ): 
-    """ Sort the given iterable in the way that humans expect.""" 
-    convert = lambda text: int(text) if text.isdigit() else text 
-    alphanum_key = lambda key: [ convert(c) for c in re.split('([0-9]+)', key) ] 
-    return sorted(l, key = alphanum_key)
-
+def sorted_nicely(l):
+    """ Sort the given iterable in the way that humans expect."""
+    convert = lambda text: int(text) if text.isdigit() else text
+    alphanum_key = lambda key: [convert(c) for c in re.split("([0-9]+)", key)]
+    return sorted(l, key=alphanum_key)
 
 
 
