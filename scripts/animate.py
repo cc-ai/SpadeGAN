@@ -54,11 +54,17 @@ parser.add_argument(
     "--save_mask", action="store_true", help="whether to save mask or not"
 )
 parser.add_argument(
-    "--gif_size", type=int, default=5, help="Number of inferences per gif"
+    "--gif_length", type=int, default=5, help="Number of inferences per gif"
 )
 parser.add_argument("--gain", type=float, default=0.1, help="Scale of the perturbation")
 parser.add_argument("--fps", type=int, default=15, help="GIF frames per seconds")
 parser.add_argument("--batch_size", type=int, default=4, help="Inference batch_size")
+parser.add_argument(
+    "--smallest_side",
+    type=int,
+    default=512,
+    help="Keep aspect ratio with smallest side at least smallest_side",
+)
 opts = parser.parse_args()
 
 # Example:
@@ -125,93 +131,86 @@ if __name__ == "__main__":
 
     images = {}
 
+    gain = opts.gain
+    gl = opts.gif_length
+    ss = opts.smallest_side
+    bs = opts.batch_size
+
     # Inference
     with torch.no_grad():
-        # Define the transform to infer with the generator
-        transform = transforms.Compose(
-            [
-                transforms.Resize((new_size, new_size)),
-                transforms.ToTensor(),
-                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-            ]
-        )
-
-        mask_transform = transforms.Compose(
-            [transforms.Resize((new_size, new_size)), transforms.ToTensor()]
-        )
-
         for i, im in enumerate(list_non_flooded):
             print("Inferring", str(im))
-            iters = opts.gif_size // opts.batch_size
-            if opts.gif_size % opts.batch_size != 0:
+            iters = gl // bs
+            if gl % bs != 0:
                 iters += 1
+
             images[str(im)] = []
+            file_id = Path(im).stem
+            path_xa = list_non_flooded[i]
+            output_path = output_folder / "{}-{}.gif".format(
+                file_id, str(gain).replace(".", "")
+            )
+
             original_mask = Image.open(list_masks[i])
-            # process
-            original_mask = Variable(mask_transform(original_mask).cuda())
+            pil_im = Image.open(im).convert("RGB")
+            w, h = pil_im.size
+            # Stay close to aspect ratio with max(w, h) = new_size (600px for instance)
+            # But model downsamples and upsamples * 8 so each need to be a multiple of 8
+            m = min((h, w))
+            ratio = ss / m
+            new_h = int(ratio * h) // 8 * 8
+            new_w = int(ratio * w) // 8 * 8
+
+            # Define the transform to infer with the generator
+            transform = transforms.Compose(
+                [
+                    transforms.Resize((new_h, new_w)),
+                    transforms.ToTensor(),
+                    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+                ]
+            )
+            mask_transform = transforms.Compose(
+                [transforms.Resize((new_h, new_w)), transforms.ToTensor()]
+            )
 
             # Make original_mask binary
+            original_mask = Variable(mask_transform(original_mask).cuda())
             mask_thresh = (torch.max(original_mask) - torch.min(original_mask)) / 2.0
             original_mask = (original_mask > mask_thresh).float()
+            # Expand channel and batch dims
             original_mask = original_mask[0].unsqueeze(0).unsqueeze(0)
-            full_mask = original_mask.repeat(opts.batch_size * iters, 1, 1, 1)
-            batch_mask = original_mask.repeat(opts.batch_size, 1, 1, 1)
-            perturbation = torch.randn_like(full_mask) # * full_mask
-            gain = opts.gain
-            # gain = (
-            #     opts.gain
-            #     * torch.arange(opts.batch_size * iters // 2).to(torch.float32)
-            #     / (opts.batch_size * iters // 2 - 1)
-            # )
-            # gain = (
-            #     torch.cat(
-            #         [
-            #             gain,
-            #             opts.gain * torch.ones((opts.batch_size * iters - len(gain),)),
-            #         ]
-            #     )
-            #     .unsqueeze(-1)
-            #     .unsqueeze(-1)
-            #     .unsqueeze(-1)
-            #     .cuda()
-            #     .to(torch.float32)
-            # )
-            noisy_mask = full_mask + perturbation * gain
-            # noisy_mask /= (
-            #     noisy_mask.max(-1).values.max(-1).values.unsqueeze(-1).unsqueeze(-1)
-            # )
+            # Create one mask per frame in the GIF
+            full_mask = original_mask.repeat(bs * iters, 1, 1, 1)
+            # Create one mask per image in a batch
+            batch_mask = original_mask.repeat(bs, 1, 1, 1)
+            # Perturn the non-zero values of the masks
+            perturbation = torch.randn_like(full_mask) * full_mask
+            noisy_mask = full_mask + perturbation * opts.gain
 
-            file_id = f"{run_id}-{i}"
+            # Create input image for all frames in the GIF
+            x_a_v = Variable(transform(pil_im).unsqueeze(0).cuda())
+            full_x_a = x_a_v.repeat(bs * iters, 1, 1, 1)
+            # Save the background (= part of the image that is outside the mask)
+            background = 255 * (x_a_v.repeat(bs, 1, 1, 1) + 1) / 2 * (1 - batch_mask)
+            # Create input to the model
+            full_input = torch.cat([full_x_a, full_mask], dim=1)
 
-            path_xa = list_non_flooded[i]
-            x_a_v = Variable(
-                transform(Image.open(im).convert("RGB")).unsqueeze(0).cuda()
-            )
-            x_a = x_a_v.repeat(opts.batch_size * iters, 1, 1, 1)
-            background = (
-                255
-                * (x_a_v.repeat(opts.batch_size, 1, 1, 1) + 1)
-                / 2
-                * (1 - batch_mask)
-            )
-
-            x_a_augment = torch.cat([x_a, full_mask], dim=1)
-
-            image_time = time()
-
+            # Create GIF
+            gif_start = time()
+            # Translate all frames
             for j in tq.tqdm(range(iters)):
-                c_a = trainer.gen.encode(
-                    x_a_augment[j * opts.batch_size : (j + 1) * opts.batch_size], 1
-                )
+                batch_input = full_input[j * bs : (j + 1) * bs]
+                batch_noisy_mask = noisy_mask[j * bs : (j + 1) * bs]
+                c_a = trainer.gen.encode(batch_input, 1)
                 # Perform cross domain translation
-                x_ab = trainer.gen.decode(
-                    c_a, noisy_mask[j * opts.batch_size : (j + 1) * opts.batch_size], 2
-                )
+                x_ab = trainer.gen.decode(c_a, batch_noisy_mask, 2)
+                # Scale as an image
                 flooded = 255 * (x_ab + 1) / 2.0
-                flood = batch_mask * flooded
+                # Isolate flood
+                flood = flooded * batch_mask
+                # Store as uint8 in the `images` dict
                 outputs = list(
                     (background + flood)
-                    # flooded
                     .detach()
                     .to(torch.uint8)
                     .cpu()
@@ -219,19 +218,8 @@ if __name__ == "__main__":
                     .transpose(0, 2, 3, 1)
                 )
                 images[str(im)] += outputs
-
-                # Define output path
-            # images[str(im)] += images[str(im)][::-1]
-            # images[str(im)] = [
-            #     ((x + 1) / 2.0).detach().cpu().numpy().transpose(1, 2, 0) * 255
-            #     for x in images[str(im)]
-            # ]
-            # original_mask = original_mask.squeeze(0).cpu().numpy().transpose(1, 2, 0)
-            # complement = 1 - original_mask
-            # images[str(im)] = [
-            #     (images[str(im)][0] * complement + original_mask * x).astype(np.uint8)
-            #     for x in images[str(im)]
-            # ]
-            path = output_folder / "{}-output.gif".format(file_id)
-            imageio.mimsave(path, images[str(im)], subrectangles=True, duration=0.15)
-    print("Overall time{:.3f}".format(time() - image_time))
+            # Save list of frames as GIF
+            imageio.mimsave(
+                output_path, images[str(im)], subrectangles=True, duration=0.15
+            )
+            print("GIF creation duration: {:.3f}\n".format(time() - gif_start))
