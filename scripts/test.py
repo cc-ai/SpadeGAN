@@ -23,6 +23,7 @@ parser.add_argument("--input", type=str, help="directory of input images")
 parser.add_argument("--mask_dir", type=str, help="directory of masks corresponding to input images")
 parser.add_argument("--output_folder", type=str, help="output image directory")
 parser.add_argument("--checkpoint", type=str, help="checkpoint of generator")
+parser.add_argument("--style", type=str, default="", help="style image path")
 
 parser.add_argument("--seed", type=int, default=10, help="random seed")
 
@@ -106,6 +107,8 @@ with torch.no_grad():
         [transforms.Resize((new_size, new_size)), transforms.ToTensor(),]
     )
 
+    style_image = Variable(transform(Image.open(opts.style).convert("RGB")).unsqueeze(0).cuda())
+
     for j in tq.tqdm(range(len(list_non_flooded))):
 
         # Define image path
@@ -137,10 +140,14 @@ with torch.no_grad():
 
         # Extract content and style
         x_a_augment = torch.cat([x_a, mask], dim=1)
-        c_a = trainer.gen.encode(x_a_augment, 1)
+        latent_size = config["new_size"] // (2 ** config["gen"]["n_downsample"])
+        z = (
+            torch.empty(1, config["gen"]["dim"], latent_size, latent_size,)
+            .normal_(mean=0, std=1.0)
+            .cuda()
+        )
 
-        # Perform cross domain translation
-        x_ab = trainer.gen.decode(c_a, mask, 2)
+        x_ab = trainer.gen(x_a, mask, style_image)
 
         # Denormalize .Normalize(0.5,0.5,0.5)...
         outputs = (x_ab + 1) / 2.0
