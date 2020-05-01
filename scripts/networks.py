@@ -425,7 +425,7 @@ class VAEGen(nn.Module):
 
         # content encoder
         self.enc = ContentEncoder(
-            n_downsample, n_res, input_dim, dim, "in", activ, pad_type=pad_type
+            n_downsample, n_res, input_dim, dim, "none", activ, pad_type=pad_type
         )
         self.dec = Decoder(
             n_downsample,
@@ -769,6 +769,25 @@ class VGGLoss(nn.Module):
         return loss
 
 
+class TVLoss(nn.Module):
+    def __init__(self, TVLoss_weight=1):
+        super(TVLoss, self).__init__()
+        self.TVLoss_weight = TVLoss_weight
+
+    def forward(self, x):
+        batch_size = x.size()[0]
+        h_x = x.size()[2]
+        w_x = x.size()[3]
+        count_h = self._tensor_size(x[:, :, 1:, :])
+        count_w = self._tensor_size(x[:, :, :, 1:])
+        h_tv = torch.pow((x[:, :, 1:, :] - x[:, :, : h_x - 1, :]), 2).sum()
+        w_tv = torch.pow((x[:, :, :, 1:] - x[:, :, :, : w_x - 1]), 2).sum()
+        return self.TVLoss_weight * 2 * (h_tv / count_h + w_tv / count_w) / batch_size
+
+    def _tensor_size(self, t):
+        return t.size()[1] * t.size()[2] * t.size()[3]
+
+
 ##################################################################################
 # Normalization layers
 ##################################################################################
@@ -1088,9 +1107,6 @@ class SpadeDecoder(nn.Module):
             spade_kernel_size,
         )
 
-        # self.nospade_0 = ResBlock(self.z_nc)
-        self.nospade_1 = ResBlock(self.z_nc)
-
         self.up_spades = nn.Sequential(
             *[
                 SPADEResnetBlock(
@@ -1105,14 +1121,18 @@ class SpadeDecoder(nn.Module):
             ]
         )
 
-        # self.up_spades = nn.Sequential(*[ResBlock(self.z_nc) for i in range(spade_n_up - 2)])
-
         self.final_nc = self.z_nc // 2 ** (spade_n_up - 2)
-        # self.final_nc = self.z_nc
-        if fullspade:
-            self.conv_img = nn.Conv2d(self.final_nc, 3, 3, padding=1)
-        else:
-            self.conv_img = nn.Conv2d(self.final_nc, self.final_nc, 3, padding=1)
+
+        self.final_spade = SPADEResnetBlock(
+            self.final_nc,
+            self.final_nc,
+            cond_nc,
+            spade_use_spectral_norm,
+            spade_param_free_norm,
+            spade_kernel_size,
+        )
+
+        self.conv_img = nn.Conv2d(self.final_nc, 3, 3, padding=1)
 
         self.upsample = nn.Upsample(scale_factor=2)
 
@@ -1129,18 +1149,16 @@ class SpadeDecoder(nn.Module):
 
     def forward(self, z, cond):
         y = self.head_0(z, cond)
-
         y = self.upsample(y)
-
         y = self.G_middle_0(y, cond)
         y = self.upsample(y)
         y = self.G_middle_1(y, cond)
-        # y = self.nospade_1(y)
 
         for i, up in enumerate(self.up_spades):
             y = self.upsample(y)
             y = up(y, cond)
 
+        y = self.final_spade(y, cond)
         y = self.conv_img(F.leaky_relu(y, 2e-1))
         y = torch.tanh(y)
         return y
@@ -1320,27 +1338,20 @@ class SpadeAdaINGen(nn.Module):
 
 
 # This one has an encoder/decoder architecture
-class SpadeAdaINGenII(nn.Module):
+class SpadeGenBasic(nn.Module):
     def __init__(self, input_dim, size, batch_size, params):
-        super(SpadeAdaINGenII, self).__init__()
+        super(SpadeGenBasic, self).__init__()
         dim = params["dim"]
         n_downsample = params["n_downsample"]
-        n_spade = params["n_spade"]
-        n_res = params["n_res"]
+
         activ = params["activ"]
         pad_type = params["pad_type"]
-        mlp_dim = params["mlp_dim"]
-        n_down_adain = params["n_down_adain"]
 
         self.latent_dim = dim
         self.batch_size = batch_size
 
         self.enc = ContentEncoder(n_downsample, 0, input_dim, dim, "in", activ, pad_type=pad_type)
-
         latent_dim = self.enc.output_dim
-        self.adain = Decoder(
-            0, n_res, latent_dim, latent_dim, res_norm="adain", activ=activ, pad_type=pad_type,
-        )
 
         self.dec = SpadeDecoder(
             latent_dim=latent_dim,
@@ -1351,43 +1362,35 @@ class SpadeAdaINGenII(nn.Module):
             spade_kernel_size=3,
         )
 
-        num_adain = self.get_num_adain_params(self.adain)
-
-        self.ParamGen = StyleEncoder(
-            n_down_adain, 3, dim, num_adain, "in", activ, pad_type=pad_type
-        )
-
-    def forward(self, input, cond, style_im):
+    def forward(self, input, cond):
         y = self.enc(input)
-        adain_params = self.ParamGen(style_im)
-        self.assign_adain_params(adain_params, self.adain)
-        y = self.adain(y)
         y = self.dec(y, cond)
-
         return y
 
-    def assign_adain_params(self, adain_params, model):
-        # assign the adain_params to the AdaIN layers in model
-        for m in model.modules():
-            if m.__class__.__name__ == "AdaptiveInstanceNorm2d":
-                mean = adain_params[:, : m.num_features]
-                std = adain_params[:, m.num_features : 2 * m.num_features]
-                m.bias = mean.contiguous().view(-1)
-                m.weight = std.contiguous().view(-1)
-                if adain_params.size(1) > 2 * m.num_features:
-                    adain_params = adain_params[:, 2 * m.num_features :]
 
-    def get_num_adain_params(self, model):
-        # return the number of AdaIN parameters needed by the model
-        num_adain_params = 0
-        for m in model.modules():
-            if m.__class__.__name__ == "AdaptiveInstanceNorm2d":
-                num_adain_params += 2 * m.num_features
-        return num_adain_params
+class FullSpadeGen(nn.Module):
+    def __init__(self, input_dim, size, batch_size, params):
+        super(FullSpadeGen, self).__init__()
+        dim = params["dim"]
+        n_downsample = params["n_downsample"]
+        n_res = params["n_res"]
+        activ = params["activ"]
+        pad_type = params["pad_type"]
+        mlp_dim = params["mlp_dim"]
 
-    def get_adain_param(self, style):
-        """
-        output of mlp on style
-        """
-        adain_params = self.mlp(style)
-        return adain_params
+        self.latent_dim = dim
+        self.batch_size = batch_size
+        self.size = size
+
+        # Get size of latent vector based on downsampling:
+        self.dec = SpadeDecoder(
+            latent_dim=self.latent_dim,
+            cond_nc=3,
+            spade_n_up=n_downsample,
+            spade_use_spectral_norm=True,
+            spade_param_free_norm="instance",
+            spade_kernel_size=3,
+        )
+
+    def forward(self, z, cond):
+        return self.dec(z, cond)
