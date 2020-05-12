@@ -616,7 +616,6 @@ class MyDatasetSynthetic(Dataset):
             image_a {Image} -- Image
             image_b {Image} -- Image
             mask {Image} -- Mask
-
         Returns:
             image_a, image_b, mask {Image, Image, Image} -- transformed image_a, pair image_b and mask
         """
@@ -683,10 +682,8 @@ class MyDatasetSynthetic(Dataset):
 
     def __getitem__(self, index):
         """Get transformed image and mask at index index in the dataset
-
         Arguments:
             index {int} -- index at which to get image, mask pair
-
         Returns:
             image_a, image_b, mask pair
         """
@@ -702,7 +699,6 @@ class MyDatasetSynthetic(Dataset):
 
     def __len__(self):
         """return dataset length
-
         Returns:
             int -- dataset length
         """
@@ -1617,3 +1613,19 @@ def tv_loss(img, tv_weight):
     h_variance = torch.sum(torch.pow(img[:, :, :-1, :] - img[:, :, 1:, :], 2))
     loss = tv_weight * (h_variance + w_variance)
     return loss
+
+
+def normalize_batch(batch):
+    # normalize using imagenet mean and std
+    mean = batch.new_tensor([0.485, 0.456, 0.406]).view(-1, 1, 1)
+    std = batch.new_tensor([0.229, 0.224, 0.225]).view(-1, 1, 1)
+    # batch = batch.div_(255.0)
+    return (batch - mean) / std
+
+
+def gram_matrix(y):
+    (b, ch, h, w) = y.size()
+    features = y.view(b, ch, w * h)
+    features_t = features.transpose(1, 2)
+    gram = features.bmm(features_t) / (ch * h * w)
+    return gram
