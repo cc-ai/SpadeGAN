@@ -6,6 +6,7 @@
 |spadecutoff|Cut off spade at early spatial resolution to allow model to smooth flooding| Yes (Sun)|
 |adainspade|Use AdaIN with a style image on the latent space| No (Sun)|
 |masked_encoder|Apply maskt to input before encoding. Allows us to use flooded domain as input| Yes (Sun)|
+|onlyb|Fullspade architecture that only operates on domain B (flooded)| Yes (Sun)|
 
 
 # Introduction
