@@ -59,11 +59,11 @@ config["vgg_model_path"] = opts.output_path
 trainer = MUNIT_Trainer(config)
 
 # Load the model (here we currently only load the latest model architecture: one single style)
-try:
-    state_dict = torch.load(opts.checkpoint)
-    trainer.gen.load_state_dict(state_dict["2"])
-except:
-    sys.exit("Cannot load the checkpoints")
+# try:
+state_dict = torch.load(opts.checkpoint)
+trainer.gen.load_state_dict(state_dict["2"])
+# except:
+#    sys.exit("Cannot load the checkpoints")
 
 # Send the trainer to cuda
 trainer.cuda()
@@ -102,8 +102,9 @@ with torch.no_grad():
         ]
     )
 
-    mask_transform = transforms.Compose([transforms.Resize((new_size, new_size)), transforms.ToTensor(),])
-
+    mask_transform = transforms.Compose(
+        [transforms.Resize((new_size, new_size)), transforms.ToTensor(),]
+    )
 
     for j in tq.tqdm(range(len(list_non_flooded))):
 
@@ -130,12 +131,13 @@ with torch.no_grad():
 
         if opts.save_mask:
             path = os.path.join(opts.output_folder, "{:03d}mask.jpg".format(j))
-            #overlay mask onto image
+            # overlay mask onto image
             save_m_a = x_a - (x_a * mask.repeat(1, 3, 1, 1)) + mask.repeat(1, 3, 1, 1)
-            vutils.save_image(save_m_a, path, padding=0, normalize=True)          
+            vutils.save_image(save_m_a, path, padding=0, normalize=True)
 
         # Extract content and style
-        c_a = trainer.gen.encode(x_a, 1)
+        x_a_augment = torch.cat([x_a, mask], dim=1)
+        c_a = trainer.gen.encode(x_a_augment, 1)
 
         # Perform cross domain translation
         x_ab = trainer.gen.decode(c_a, mask, 2)
